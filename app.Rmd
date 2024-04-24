@@ -1,0 +1,364 @@
+---
+title: "E-Commerce Product and Customer Analysis"
+output: flexdashboard::flex_dashboard
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r library, include=FALSE}
+library(shiny)
+library(tidyverse)
+library(packcircles)
+library(tm)
+library(wordcloud)
+library(wordcloud2)
+library(RColorBrewer)
+library(SnowballC)
+library(tidytext)
+library(textdata)
+library(magrittr)
+library(maps)
+library(viridis)
+library(ggrepel)
+library(flexdashboard)
+library(rmarkdown)
+library(knitr)
+library(Hmisc)
+library(readr)
+opts_chunk$set(echo = FALSE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55), tidy = TRUE)
+
+```
+
+```{r source}
+source('fp_functions.R')
+```
+
+```{r read_data}
+purchase_history <- read.csv('purchase_history.csv')
+customer <- read.csv('customer.csv')
+afinn <- read.csv('afinn.csv')
+# pre-process data set
+# split the categories
+category_split <- strsplit(purchase_history$category, split = "\\|")
+purchase_history$category1 <- sapply(category_split, function(x) ifelse(length(x) >= 1, x[1], NA))
+purchase_history$category2 <- sapply(category_split, function(x) ifelse(length(x) >= 2, x[2], NA))
+purchase_history$category3 <- sapply(category_split, function(x) ifelse(length(x) >= 3, x[3], NA))
+# clean data types
+purchase_history <- purchase_history %>%
+  mutate(discounted_price = as.numeric(gsub(',','',substring(discounted_price, 2))),
+         actual_price = as.numeric(gsub(',','',substring(actual_price, 2))),
+         discount_percentage = as.numeric(str_sub(discount_percentage, end = -2)) / 100,
+         rating = as.numeric(rating),
+         rating_count = as.numeric(gsub(',', '',rating_count)))
+
+```
+
+```{r constants}
+unique_cat <- c('All', unique(purchase_history$category1))
+unique_stt <- c('All', unique(customer$state))
+
+
+```
+
+
+```{r ui}
+ui <- fluidPage(
+  
+  tabsetPanel(
+    # Combined tab for User Demographics and Top Products
+    tabPanel("User Demographics & Top Products",
+      fluidRow(
+        column(6, offset = 3,
+          h3("Count of Product Categories"),
+          selectInput(inputId = "category1",
+                      label = "Select Sub-category:", 
+                      choices = unique_cat, 
+                      selected = unique_cat[1]), 
+          checkboxInput(inputId = "show_category_count1", 
+                        label = "Show Count", value = FALSE),
+          plotOutput("plot1", height = "700px")
+        ),
+      ),
+      fluidRow(
+        column(6, offset = 3,
+          h3("Category Popularities"),
+          selectInput(inputId = "category2",
+                      label = "Select Sub-category:",
+                      choices = unique_cat,  
+                      selected = unique_cat[1]),
+          checkboxInput(inputId = "show_rating_count2",
+                      label = "Show Count", value = FALSE),
+          
+          plotOutput("plot2", height = "700px")
+        )
+      ),
+      fluidRow(
+        column(6, offset = 3,
+          h3('High Rating (>4.3) Percentage'),
+          selectInput(inputId = 'category3',
+                      label = 'Select Sub-category:',
+                      choices = unique_cat,
+                      selected = unique_cat[1]),
+          checkboxInput(inputId = 'show_rating_pct3',
+                        label = 'Show Percentage', value = FALSE),
+          plotOutput('plot3', height = "700px")
+        )
+      )
+    ),
+    
+    tabPanel('Product Review Text Analysis',
+      fluidRow(
+        column(6, offset = 3, 
+        h3('Most Frequent Words'),
+        selectInput(inputId = 'category4',
+                    label = 'Select Sub-category:',
+                    choices = unique_cat,
+                    selected = unique_cat[1]),
+        sliderInput(inputId = 'num_words4',
+                    label = 'Select Number of Words:',
+                    min = 0,
+                    max = 150,
+                    value = 50),
+        plotOutput('plot4', height = '550px')
+        )
+      ),
+      fluidRow(
+        column(10, offset = 2,
+        h3('Sentiment Score Distribution with Different Rating Ranges'),
+        selectInput(inputId = 'category5',
+                    label = 'Select Sub-category:',
+                    choices = unique_cat,
+                    selected = unique_cat[1]),
+        sliderInput(inputId = 'rating_range5',
+                    label = 'Rating Range:',
+                    min = 0,
+                    max = 5,
+                    step = 0.1,
+                    value = c(2,5)),
+        plotOutput('plot5', height = '700px')
+        )
+      )
+    ),
+    tabPanel('Effectiveness of Discount',
+      fluidRow(
+        column(6, offset = 3,
+        h3('Discount Percentage'),
+        selectInput(inputId = 'category6',
+                    label = 'Select Sub-category:',
+                    choices = unique_cat,
+                    selected = unique_cat[1]),
+        checkboxInput(inputId = 'show_discount_pct6',
+                      label = 'Show Percentage:', value = FALSE),
+        plotOutput('plot6', height = '700px')
+        )
+      ),
+      fluidRow(
+        column(6, offset = 3,
+        h3('Discount Percentage vs. Rating'),
+        selectInput(inputId = 'category7',
+                    label = 'Select Sub-category:',
+                    choices = unique_cat,
+                    selected = unique_cat[1]),
+        checkboxInput(inputId = 'show_line7',
+                      label = 'Show Regression Line', value = FALSE),
+        plotOutput('plot7', height = '700px')
+        )
+      )
+    ),
+    tabPanel('Customer Demographics',
+      fluidRow(
+        column(10, offset = 1,
+        h3('Geographic Distribution (State Level)'),
+        checkboxInput(inputId = 'show_state8',
+                      label = 'Show State Names', value = FALSE),
+        checkboxInput(inputId = 'show_value8',
+                      label = 'Show Customer Count', value = FALSE),
+        plotOutput('plot8', height = '700px')
+        )
+      ),
+      fluidRow(
+        column(6, offset = 3,
+        h3('Geographic Distrubion (City Level)'),
+        selectInput(inputId = 'states9',
+                    label = 'Select State:',
+                    choices = unique_stt,
+                    selected = unique_stt[1]),
+        checkboxInput(inputId = 'show_value9',
+                      label = 'Show Value', value = FALSE),
+        plotOutput('plot9', height = '700px')
+        )
+      ),
+      fluidRow(
+        column(6, offset = 3,
+        h3('Gender Distribution'),
+        selectInput(inputId = 'states10',
+                    label = 'Select States:',
+                    choices = unique_stt,
+                    selected = unique_stt[1]),
+        checkboxInput(inputId = 'show_gender10',
+                      label = 'Show Gender', value = FALSE),
+        checkboxInput(inputId = 'show_pct10',
+                      label = 'Show Percentage', value = FALSE),
+        plotOutput('plot10', height = '700px')
+        )
+      )
+    ),
+    tabPanel('About Me',
+      fluidRow(
+        column(8, 
+        h3('Jiale Gao'),
+        tags$img(src = 'https://i.postimg.cc/3w98K4Mj/jiale-gao-photo.jpg', height = '200px', width = '200px'),
+
+        p(tags$a(href = 'https://www.linkedin.com/in/jiale-roger-gao/', 
+               tags$img(src = 'https://cdn-icons-png.flaticon.com/256/61/61109.png', 
+                        style = 'height:20px;'), 
+               " LinkedIn Profile", target = "_blank")),
+        p(HTML("As a data analyst at Matchmiles, I leverage my MS in Applied Analytics from Columbia University and my expertise in business data analytics, market research and data visualization to provide insights and solutions for the travel industry. I use Python to analyze large datasets, create interactive dashboards, and generate reports that help optimize customer acquisition, retention, and satisfaction. Previously, I gained valuable experience as a research analyst at GF Securities and SWS Research, where I conducted market research, financial modeling, and data analysis for various sectors and companies. I also hold a BS in Financial Mathematics and Statistics from UC Santa Barbara and a certification in Quantitative Research Job Simulation from JPMorgan Chase & Co. I am passionate about applying data science to solve real-world problems and create value for businesses and society. I am always eager to learn new skills, collaborate with diverse teams, and challenge myself to deliver high-quality results. "), style = "text-indent: 20px; max-width: 500px;"),
+        p(HTML("-Bl skillset: Tableau, PowerBI, capable of using Bl tool in Python,R "), style = "text-indent: 0px; max-width: 500px;"),
+        p(HTML("-Programming Language: Python(Pandas, Numpy, Matplotlib, SciKit-Learn), SQL(advanced), R(Tidyverse, Ggplot2, Shiny)"), style = "text-indent: 0px; max-width: 500px;"),
+        p(HTML("-Statistics: A/B testing, hypothesis testing, linear regression,logistic regression, PCA, clustering, text analytics, time series analysis, tree models"), style = "text-indent: 0px; max-width: 500px;"))
+      )
+    )
+  )
+)
+```
+
+
+```{r server}
+server <- function(input, output) {
+  output$plot1 <- renderPlot({
+    plt <- count_category(purchase_history, input$category1, input$show_category_count1)
+    plt
+  })
+  
+  output$plot2 <- renderPlot({
+    plt <- count_rating_bubble(purchase_history, input$category2, input$show_rating_count2)
+    plt
+  })
+  
+  output$plot3 <- renderPlot({
+    plt <- high_rating_pct(purchase_history, input$category3, input$show_rating_pct3)
+    plt
+  })
+  
+  output$plot4 <- renderPlot({
+    plt <- review_word_cloud(purchase_history, input$category4, word_num = input$num_words4)
+    plt
+  })
+  
+  output$plot5 <- renderPlot({
+    plt <- high_rating_sentiment(purchase_history, input$category5, input$rating_range5, afn = afinn)
+    plt
+  })
+  
+  output$plot6 <- renderPlot({
+    plt <- discount_pct(purchase_history, input$category6, input$show_discount_pct6)
+    plt
+  })
+  
+  output$plot7 <- renderPlot({
+    plt <- discount_rating(purchase_history, input$category7, input$show_line7)
+    plt
+  })
+  
+  output$plot8 <- renderPlot({
+    plt <- geographics(customer, input$show_state8, input$show_value8)
+    plt
+  })
+  
+  output$plot9 <- renderPlot({
+    plt <- city_bubble(customer, stt = input$states9, show_values = input$show_value9)
+    plt
+  })
+  
+  output$plot10 <- renderPlot({
+    plt <- gender_dist(customer, stt = input$states10, show_gender = input$show_gender10, show_pct = input$show_pct10)
+    plt
+  })
+}
+```
+
+
+```{r run app, echo=FALSE}
+shinyApp(ui = ui, server = server)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
